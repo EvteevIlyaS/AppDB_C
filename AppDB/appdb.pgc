@@ -1,0 +1,478 @@
+#include <iostream>
+#include <string>
+
+using namespace std;
+
+exec sql include sqlca;
+exec sql include pgtypes_date;
+
+void create_db(){
+    EXEC SQL SET AUTOCOMMIT TO ON;
+    EXEC SQL create database grocery_shop_cpp;
+    EXEC SQL SET AUTOCOMMIT TO OFF;
+    cout << "База данных создана\n";
+}
+
+void cr_table(){
+    EXEC SQL create procedure create_table() as $$
+	create table grocery (
+		ProductID serial primary key,
+		ProductPlace varchar (50) not null,
+		IsRemoved varchar (50) not null
+	);
+    $$ language sql;
+    EXEC SQL call create_table();
+    EXEC SQL commit;
+    cout << "Таблица создана\n";
+}
+
+void roles_proc(){
+    EXEC SQL create or replace procedure create_start_guest() as $$
+        begin
+            create role guest_ password '1' login;
+            grant select on table grocery to guest_;
+        end;
+    $$ language plpgsql;
+    exec sql commit;
+
+    EXEC SQL create or replace procedure create_guest() as $$
+        begin
+            create role new_guest password '1' login;
+            grant select on table grocery to new_guest;
+        end;
+    $$ language plpgsql;
+    exec sql commit;
+
+        EXEC SQL create or replace procedure create_admin() as $$
+        begin
+            create role new_admin password '1' superuser;
+        end;
+    $$ language plpgsql;
+    exec sql commit;
+}
+
+int create_db_role(bool isFirstTime){
+    int choice;
+
+    if (!isFirstTime) {
+        cout << "Выберите создаваемого пользователя:\n";
+        cout << "1 - Администратор\n";
+        cout << "2 - Гость\n";
+
+        cin >> choice;
+        while (choice != 1 && choice != 2){
+            cout << "Неправильное значение, попробуйте снова\n";
+            cin >> choice;
+        }
+
+        switch (choice){
+            case 1:
+                EXEC SQL call create_admin();
+                if (sqlca.sqlcode != 0){
+                    cout << "Дополнительный супер-пользователь уже создан\n";
+                    return 0;
+                }
+                EXEC SQL commit;
+                break;
+            case 2:
+                EXEC SQL call create_guest();
+                if (sqlca.sqlcode != 0){
+                    cout << "Дополнительный гостевой пользователь уже создан\n";
+                    return 0;
+                }
+                EXEC SQL commit;
+                break;
+        }
+        cout << "Пользователь создан\n";
+        return 1;
+    }
+    else {
+        EXEC SQL call create_start_guest();
+        EXEC SQL commit;
+        cout << "Гостевой пользователь создан\n";
+        return 1;
+    }
+}
+
+void fill_table(){
+    EXEC SQL create procedure fill_table() as $$
+	INSERT INTO grocery VALUES
+    (001, 'Холодильник', true),
+    (002, 'Стелаж', false),
+    (003, 'Склад', false)
+    $$ language sql;
+    EXEC SQL call fill_table();
+    EXEC SQL commit;
+    cout << "Таблица заполнена\n";
+}
+
+int create_conn(const char *t, const char *u, const char *p){
+    EXEC SQL BEGIN DECLARE SECTION;
+    char dbname[1024];
+    const char *target = t;
+    const char *user = u;
+    const char *passwd = p;
+    EXEC SQL END DECLARE SECTION;
+    EXEC SQL CONNECT TO :target AS con USER :user/:passwd;
+    if(sqlca.sqlcode!=0){
+            return 0;
+        }
+    EXEC SQL COMMIT;
+    EXEC SQL SELECT current_database() INTO :dbname;
+    cout << "Подключенная база - " << dbname << endl;
+    return 1;
+}
+
+void clear_table(){
+    EXEC SQL call clear_table();
+    EXEC SQL COMMIT;
+    cout << "Таблица упешно очищена\n";
+}
+
+int ins_row(){
+    cout << "Введите данные новой строки\n";
+    cout << "ID - int:\n";
+    int i;
+    cin >> i;
+    if (cin.fail()){
+        cout << "Неверный ввод ID\n";
+        return 0;
+    }
+        
+    cout << "Местоположение товара - String:\n";
+    string p;
+    cin >> p;
+    if (cin.fail()){
+        cout << "Неверный ввод местоположения\n";
+        return 0;
+    }
+
+    cout << "Не утилизирован ли товар - boolean:\n";
+    bool r;
+    cin >> r;
+    if (cin.fail()){
+        cout << "Неверный ввод утилизированности товара\n";
+        return 0;
+    }
+
+    EXEC SQL BEGIN DECLARE SECTION;
+    int id = i;
+    const char *place = p.c_str();
+    bool rem = r;
+    EXEC SQL END DECLARE SECTION;
+    EXEC SQL call insert_row(:id, :place, :rem);
+    if (sqlca.sqlcode != 0){
+        cout << "Невозможно добавить указанную строку (повторение первичного ключа)\n";
+        return 0;
+    }
+    EXEC SQL COMMIT;
+
+    cout << "Поле упешно добавлено\n";
+    return 1;
+}
+
+int find_rows(){
+    cout << "Введите местоположение товара для поиска:\n";
+    string p;
+    cin >> p;
+    if (cin.fail()){
+        cout << "Неверный ввод местоположения\n";
+        return 0;
+    }
+
+    EXEC SQL BEGIN DECLARE SECTION;
+    const char *place = p.c_str();
+    int id;
+    varchar pp[32];
+    varchar rem[32];
+    EXEC SQL END DECLARE SECTION;
+
+    EXEC SQL declare search_res cursor for select * from find_rows(:place);
+
+    EXEC SQL open search_res;
+    while(1){
+        exec sql fetch search_res into :id,:pp,:rem;
+        if(sqlca.sqlcode!=0){
+            break;
+        }
+        printf("id=%d, productplace=%s, isremoved=%s\n", id, pp.arr, rem.arr);
+    }
+    
+    EXEC SQL close search_res;
+    EXEC SQL commit;
+    return 1;
+}
+
+
+void drop_db(){
+    EXEC SQL DISCONNECT ALL;
+    create_conn("TASK_HSE@localhost:5432", "postgres", "8850");
+    EXEC SQL SET AUTOCOMMIT TO ON;
+    EXEC SQL drop database grocery_shop_cpp;
+    EXEC SQL SET AUTOCOMMIT TO OFF;
+    EXEC SQL create or replace procedure drop_role_() as $$
+        drop role guest_;
+    $$ language sql;
+    EXEC SQL create or replace procedure drop_role_new_guest() as $$
+        drop role new_guest;
+    $$ language sql;
+    EXEC SQL create or replace procedure drop_role_new_admin() as $$
+        drop role new_admin;
+    $$ language sql;
+    EXEC SQL call drop_role_();
+    EXEC SQL COMMIT;
+    EXEC SQL call drop_role_new_guest();
+    EXEC SQL COMMIT;
+    EXEC SQL call drop_role_new_admin();
+    EXEC SQL COMMIT;
+    cout << "База данных удалена\n";
+    EXEC SQL DISCONNECT ALL;
+}
+
+int update_row(){
+    cout << "Введите ID, по которому обновляеются данные:\n";
+    int i;
+    cin >> i;
+    if (cin.fail()){
+        cout << "Неверный ввод ID\n";
+        return 0;
+    }
+        
+    cout << "Введите новое местоположение товара:\n";
+    string p;
+    cin >> p;
+    if (cin.fail()){
+        cout << "Неверный ввод местоположения\n";
+        return 0;
+    }
+
+    cout << "Введите новые данные об утилизованности товара:\n";
+    bool r;
+    cin >> r;
+    if (cin.fail()){
+        cout << "Неверный ввод утилизированности товара\n";
+        return 0;
+    }
+
+    EXEC SQL BEGIN DECLARE SECTION;
+    int id = i;
+    const char *place = p.c_str();
+    bool rem = r;
+    EXEC SQL END DECLARE SECTION;
+    EXEC SQL call update_row(:id, :place, :rem);
+    EXEC SQL COMMIT;
+    cout << "Строка изменена\n";
+    return 1;
+}
+
+int delete_rows(){
+    cout << "Введите местоположение, по которому будет производиться удаление:\n";
+    string p;
+    cin >> p;
+    if (cin.fail()){
+        cout << "Неверный ввод местоположения\n";
+        return 0;
+    }
+
+    EXEC SQL BEGIN DECLARE SECTION;
+    const char *place = p.c_str();
+    EXEC SQL END DECLARE SECTION;
+    EXEC SQL call delete_rows(:place);
+    EXEC SQL COMMIT;
+    cout << "Соответствующие строки удалены\n";
+    return 1;
+}
+
+void show_table(){
+    EXEC SQL BEGIN DECLARE SECTION;
+    int id;
+    varchar pp[32];
+    varchar rem[32];
+    EXEC SQL END DECLARE SECTION;
+
+    EXEC SQL declare full_t cursor for select * from grocery;
+
+    EXEC SQL open full_t;
+    while(1){
+        exec sql fetch full_t into :id,:pp,:rem;
+        if(sqlca.sqlcode!=0){
+            break;
+        }
+        printf("id=%d, productplace=%s, isremoved=%s\n", id, pp.arr, rem.arr);
+    }
+    
+    EXEC SQL close full_t;
+    EXEC SQL commit;
+}
+
+int main() {
+    cout << "Выберите польователя:\n";
+    cout << "1 - Администратор\n";
+    cout << "2 - Гость\n";
+
+    int role;
+    cin >> role;
+    while (role != 1 && role != 2){
+        cout << "Неправильное значение, попробуйте снова\n";
+        cin >> role;
+    }
+
+    string password;
+    string right_p = "8850";
+
+    switch (role) {
+        case 1: 
+            cout << "Введите пароль:\n";
+            cin >> password;
+            if (password != "8850"){
+                cout << "Неверный пароль!\n";
+                return 1;
+            }
+
+            if (create_conn("grocery_shop_cpp@localhost:5432", "postgres", "8850") == 0){
+                cout << "Соответствующей базы не существует, сейчас она будет создана!\n";
+                create_conn("TASK_HSE@localhost:5432", "postgres", "8850");
+                create_db();
+                EXEC SQL DISCONNECT ALL;
+                create_conn("grocery_shop_cpp@localhost:5432", "postgres", "8850");
+                cr_table();
+                fill_table();
+                roles_proc();
+                create_db_role(true);
+
+                EXEC SQL create procedure clear_table() as $$
+                    delete from grocery;
+                $$ language sql;
+                EXEC SQL COMMIT;
+                cout << "Процедура для очистки таблицы создана\n";
+
+                EXEC SQL create procedure insert_row(id int, place varchar, isrem bool) as $$
+                    begin
+                        insert into grocery values (id, place, isrem);
+                    end;
+                $$ language plpgsql;
+                EXEC SQL COMMIT;
+                cout << "Процедура для добавления новой строки создана\n";
+
+                EXEC SQL create or replace function find_rows(v varchar) returns setof grocery as $$
+                    select productid, productplace, isremoved from grocery where productplace = v;
+                $$ language sql;
+                EXEC SQL COMMIT;
+                cout << "Функция для поиска строк создана\n";
+
+                EXEC SQL create or replace procedure update_row(i int, v varchar, b bool) as $$
+                    begin
+                        update grocery set productplace=v, isremoved=b where productid=i;
+                    end;
+                $$ language plpgsql;
+                EXEC SQL COMMIT;
+                cout << "Процедура для изменения строк создана\n";
+
+                EXEC SQL create or replace procedure delete_rows(v varchar) as $$
+                    begin
+                        delete from grocery where productplace=v;
+                    end;
+                $$ language plpgsql;
+                EXEC SQL COMMIT;
+                cout << "Процедура для удаления строк создана\n";
+
+                
+            };
+
+            while (1) {
+                cout << "\nВыберите опцию:\n";
+                cout << "1 - удаление базы данных\n";
+                cout << "2 - очистка таблицы\n";
+                cout << "3 - добавление новых данных\n";
+                cout << "4 - поиск по полю 'productplace'\n";
+                cout << "5 - обновление картежа\n";
+                cout << "6 - удаление по полю 'productplace'\n";
+                cout << "7 - создать нового пользователя\n";
+                cout << "8 - показать всю таблицу\n";
+                cout << "9 - завершить работу\n";
+
+                int option;
+                cin >> option;
+                while (option != 1 && option != 2 && option != 3 && option != 4 && option != 5 && option != 6 && option != 7 && option != 8 && option != 9){
+                    cout << "Неправильное значение, попробуйте снова\n";
+                    cin >> option;
+                }
+
+                switch (option) {
+                    case 1:
+                        drop_db();
+                        return 0;
+                    case 2:
+                        clear_table();
+                        break;
+                    case 3:
+                        if (ins_row() == 0){
+                            return 0;
+                        };
+                        break;
+                    case 4:
+                    if (find_rows() == 0){
+                            return 0;
+                        };
+                        break;
+                    case 5:
+                        if (update_row() == 0){
+                            return 0;
+                        };
+                        break;
+                    case 6:
+                        if (delete_rows() == 0){
+                            return 0;
+                        };
+                        break;
+                    case 7:
+                        if (create_db_role(false) == 0){
+                            return 0;
+                        }
+                        break;
+                    case 8:
+                        show_table();
+                        break;
+                    case 9:
+                        EXEC SQL DISCONNECT ALL;
+                        return 0;
+                }  
+            }
+
+        case 2: 
+            if (create_conn("grocery_shop_cpp@localhost:5432", "guest_", "1") == 0){
+                cout << "Базы не существует, зайдите на администратора, чтобы создать ее\n";
+                return 0;
+            };
+
+            while (1) {
+                cout << "\nВыберите опцию:\n";
+                cout << "1 - поиск по полю 'productplace'\n";
+                cout << "2 - показать всю таблицу\n";
+                cout << "3 - завершить работу\n";
+
+                int option;
+                cin >> option;
+                while (option != 1 && option != 2 && option != 3){
+                    cout << "Неправильное значение, попробуйте снова\n";
+                    cin >> option;
+                }
+
+                switch (option) {
+                    case 1:
+                        if (find_rows() == 0){
+                                return 0;
+                        };
+                        break;
+                    case 2:
+                        show_table();
+                        break;
+                    case 3:
+                        EXEC SQL DISCONNECT ALL;
+                        return 0;
+                }
+            }
+    }
+}
+
+/*ecpg -o appdb.cpp appdb.pgc && g++ -c appdb.cpp -o appdb.o && g++ appdb.o -lecpg -o*/
